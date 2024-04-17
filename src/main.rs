@@ -9,7 +9,7 @@ use ethers::{
     utils::hex,
 };
 
-use std::{collections::HashMap, str::FromStr};
+use std::{collections::HashMap, io::BufRead, str::FromStr, thread::sleep, time::Duration};
 use std::{
     io::{stdin, stdout, Write},
     sync::Arc,
@@ -25,12 +25,14 @@ struct Variable {
 
 struct State {
     variables_by_name: HashMap<String, Variable>,
+    abis_by_name: HashMap<String, abi::Abi>,
 }
 
 impl State {
     fn new() -> State {
         State {
             variables_by_name: HashMap::new(),
+            abis_by_name: HashMap::new(),
         }
     }
 
@@ -40,6 +42,18 @@ impl State {
 
     fn get_variable(&self, name: &str) -> Option<&Variable> {
         self.variables_by_name.get(name)
+    }
+
+    fn set_abi(&mut self, name: String, abi: abi::Abi) {
+        self.abis_by_name.insert(name, abi);
+    }
+
+    fn get_abi(&self, name: &str) -> Option<&abi::Abi> {
+        self.abis_by_name.get(name)
+    }
+
+    fn get_abis(&self) -> &HashMap<String, abi::Abi> {
+        &self.abis_by_name
     }
 }
 
@@ -114,6 +128,23 @@ fn eval_command(command: &str, state: &mut State) {
             let expression = parts.next().unwrap();
             println!("{}", eval_expression(expression, state));
         }
+        Some("loadAbi") => {
+            let mut parts = parts.next().unwrap().splitn(2, ' ');
+            let abi_name = parts.next().unwrap();
+            let abi_path = parts.next().unwrap();
+            let abi_reader = std::fs::File::open(abi_path).unwrap();
+            let abi = abi::Abi::load(abi_reader).unwrap();
+            state.set_abi(abi_name.to_string(), abi);
+            println!("Loaded ABI {}", abi_name);
+        }
+        Some("abis") => {
+            for (name, _) in state.get_abis() {
+                println!("{}", name);
+            }
+        }
+        Some("pwd") => {
+            println!("{:?}", std::env::current_dir().unwrap());
+        }
         _ => println!("Unknown command"),
     }
 }
@@ -128,6 +159,14 @@ fn test_eval_command() {
     eval_command("print hello $foo world $bar", &mut state);
 }
 
+fn command_listener(state: &mut State) {
+    let stdin = stdin();
+    for line in stdin.lock().lines() {
+        let line = line.unwrap();
+        eval_command(&line, state);
+    }
+}
+
 fn main() {
     let private_key = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d";
     let chain_id = 1337u64;
@@ -139,11 +178,22 @@ fn main() {
     let wallet = wallet::from(private_key).with_chain_id(chain_id);
     let client = Arc::new(SignerMiddleware::new(provider.clone(), wallet));
 
-    let abi_path = "abi/erc20.abi";
-    let abi = serde_json::from_str::<abi::Abi>(abi_path).unwrap();
+    println!("current directory: {:?}", std::env::current_dir().unwrap());
+    let abi_path = "./abi/erc20.abi";
+    let abi_reader = std::fs::File::open(abi_path).unwrap();
+    let abi = abi::Abi::load(abi_reader).unwrap();
+    // let abi = include_str!("../abi/erc20.abi");
     let contract_address = "0xd45a464a2412a2f83498d13635698a041b9dbe9b";
     let h160_contract_address = H160::from_str(contract_address).unwrap();
     let contract = Contract::new(h160_contract_address, abi, client);
+
+    let mut state = State::new();
+    // run command listener
+    std::thread::spawn(move || {
+        command_listener(&mut state);
+    });
+
+    sleep(Duration::from_secs(100000));
     // let stdin = stdin();
     // let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
     // write!(stdout, "{}{}", termion::clear::All, cursor::Goto(1, 1)).unwrap();
