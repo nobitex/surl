@@ -9,7 +9,7 @@ use ethers::{
     utils::hex,
 };
 
-use std::{collections::HashMap, io::BufRead, str::FromStr, thread::sleep, time::Duration};
+use std::{collections::HashMap, io::BufRead, path, str::FromStr, thread::sleep, time::Duration};
 use std::{
     io::{stdin, stdout, Write},
     sync::Arc,
@@ -19,10 +19,13 @@ use termion::event::{Event, Key, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
 
+
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Variable {
     value: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct State {
     variables_by_name: HashMap<String, Variable>,
     abis_by_name: HashMap<String, abi::Abi>,
@@ -54,6 +57,16 @@ impl State {
 
     fn get_abis(&self) -> &HashMap<String, abi::Abi> {
         &self.abis_by_name
+    }
+
+    fn save_state(&self, path: &str) {
+        let mut file = std::fs::File::create(path).unwrap();
+        serde_json::to_writer(&file, self).unwrap();
+    }
+
+    fn load_state(path: &str) -> State {
+        let file = std::fs::File::open(path).unwrap();
+        serde_json::from_reader(file).unwrap()
     }
 }
 
@@ -118,6 +131,7 @@ fn test_eval_expression() {
 fn eval_command(command: &str, state: &mut State) {
     let mut parts = command.splitn(2, ' ');
     match parts.next() {
+        // variable commands
         Some("set") => {
             let mut parts = parts.next().unwrap().splitn(2, ' ');
             let name = parts.next().unwrap();
@@ -128,6 +142,8 @@ fn eval_command(command: &str, state: &mut State) {
             let expression = parts.next().unwrap();
             println!("{}", eval_expression(expression, state));
         }
+
+        // abis commands
         Some("loadAbi") => {
             let mut parts = parts.next().unwrap().splitn(2, ' ');
             let abi_name = parts.next().unwrap();
@@ -137,14 +153,29 @@ fn eval_command(command: &str, state: &mut State) {
             state.set_abi(abi_name.to_string(), abi);
             println!("Loaded ABI {}", abi_name);
         }
-        Some("abis") => {
+        Some("listAbis") => {
             for (name, _) in state.get_abis() {
                 println!("{}", name);
             }
         }
+
+        // utility commands
         Some("pwd") => {
             println!("{:?}", std::env::current_dir().unwrap());
         }
+
+        // state commands
+        Some("saveState") => {
+            let path = parts.next().unwrap();
+            state.save_state(path);
+            println!("state saved to {} successfully", path);
+        }
+        Some("loadState") => {
+            let path = parts.next().unwrap();
+            *state = State::load_state(path);
+            println!("state loaded from {} successfully", path);
+        }
+
         _ => println!("Unknown command"),
     }
 }
@@ -189,11 +220,12 @@ fn main() {
 
     let mut state = State::new();
     // run command listener
-    std::thread::spawn(move || {
-        command_listener(&mut state);
-    });
+    command_listener(&mut state);
+    // std::thread::spawn(move || {
+    //     command_listener(&mut state);
+    // });
 
-    sleep(Duration::from_secs(100000));
+    // sleep(Duration::from_secs(100000));
     // let stdin = stdin();
     // let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
     // write!(stdout, "{}{}", termion::clear::All, cursor::Goto(1, 1)).unwrap();
