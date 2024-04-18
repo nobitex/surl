@@ -1,8 +1,13 @@
 extern crate termion;
 mod commands;
 mod state;
+mod terminal;
 
-use commands::{GetAbiOpt, GetAbisOpt, GetVariableOpt, LoadAbiOpt, LoadStateOpt, PWDOpt, SaveStateOpt, SetVariableOpt};
+use colored::Colorize;
+use commands::{
+    GetAbiOpt, GetAbisOpt, GetVariableOpt, LoadAbiOpt, LoadStateOpt, PWDOpt, SaveStateOpt,
+    SetVariableOpt,
+};
 use ethers::{
     core::k256::elliptic_curve::SecretKey,
     middleware::SignerMiddleware,
@@ -14,16 +19,12 @@ use ethers::{
 use state::State;
 use tokio::sync::Mutex;
 
-use std::{collections::HashMap, io::BufRead, path, str::FromStr, thread::sleep, time::Duration};
+use std::io::{self, BufRead};
 use std::{
-    io::{stdin, stdout, Write},
+    io::{stdin, Write},
     sync::Arc,
 };
 use structopt::StructOpt;
-use termion::cursor;
-use termion::event::{Event, Key, MouseEvent};
-use termion::input::{MouseTerminal, TermRead};
-use termion::raw::IntoRawMode;
 
 #[derive(StructOpt, Debug)]
 enum Opt {
@@ -43,39 +44,32 @@ enum Opt {
     LoadState(LoadStateOpt),
     #[structopt(name = "save-state", alias = "ss")]
     SaveState(SaveStateOpt),
+    #[structopt(name = "help")]
+    Help,
 }
 
 #[tokio::main]
 async fn main() {
-    let private_key = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d";
-    let chain_id = 1337u64;
-    let endpoint = "http://localhost:8545";
-    let provider = Provider::<Http>::try_from(endpoint).unwrap();
-    let private_key_bytes = hex::decode(private_key).expect("Invalid hex string for from");
-    let private_key: SecretKey<_> =
-        SecretKey::from_slice(&private_key_bytes).expect("Invalid private key");
-    let wallet = wallet::from(private_key).with_chain_id(chain_id);
-    let client = Arc::new(SignerMiddleware::new(provider.clone(), wallet));
-
-    println!("current directory: {:?}", std::env::current_dir().unwrap());
-    let abi_path = "./abi/erc20.abi";
-    let abi_reader = std::fs::File::open(abi_path).unwrap();
-    let abi = abi::Abi::load(abi_reader).unwrap();
-    // let abi = include_str!("../abi/erc20.abi");
-    let contract_address = "0xd45a464a2412a2f83498d13635698a041b9dbe9b";
-    let h160_contract_address = H160::from_str(contract_address).unwrap();
-    let contract = Contract::new(h160_contract_address, abi, client);
-
     let context = Arc::new(Mutex::new(State::new()));
 
+    help();
     let stdin = stdin();
+
+    print!("{}", ">> ".green());
+    io::stdout().flush().unwrap();
     for line in stdin.lock().lines() {
         let line = vec!["surl", &line.unwrap()].join(" ");
         let parts = line.split_whitespace().collect::<Vec<&str>>();
-
         let matches = Opt::clap().get_matches_from_safe_borrow(parts.clone());
         if matches.is_err() {
-            println!("Invalid command");
+            if parts.len() > 1 {
+                println!(
+                    "{}",
+                    "Invalid command; type 'help' for a list of commands".red()
+                );
+            }
+            print!("{}", ">> ".green());
+            io::stdout().flush().unwrap();
             continue;
         }
 
@@ -105,49 +99,89 @@ async fn main() {
             Opt::SaveState(opt) => {
                 commands::save_state(opt, context.clone()).await;
             }
+            Opt::Help => {
+                help();
+            }
             _ => {}
         }
+        print!("{}", ">> ".green());
+        io::stdout().flush().unwrap();
     }
 
-    // command_listener(&mut command_handler);
-    // std::thread::spawn(move || {
-    //     command_listener(&mut state);
-    // });
-
-    // sleep(Duration::from_secs(100000));
-    // let stdin = stdin();
+    // let stdin = std::io::stdin();
     // let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
-    // write!(stdout, "{}{}", termion::clear::All, cursor::Goto(1, 1)).unwrap();
-    // stdout.flush().unwrap();
+    // let mut terminal = Terminal::new(stdin, stdout);
+    // let line = terminal.read_line();
+    // println!("line: {:?}", line);
 
-    // for c in stdin.events() {
-    //     let evt = c.unwrap();
-    //     match evt {
-    //         Event::Key(Key::Ctrl('q')) => break,
-    //         // Event::Mouse(me) => {
-    //         //     match me {
-    //         //         MouseEvent::Press(_, x, y) => {
-    //         //             write!(stdout, "{}x", termion::cursor::Goto(x, y)).unwrap();
-    //         //         },
-    //         //         _ => (),
-    //         //     }
-    //         // }
-    //         Event::Key(Key::Backspace) => {
-    //             write!(stdout, "{}", termion::cursor::Left(1)).unwrap();
-    //             write!(stdout, "{}", termion::clear::UntilNewline).unwrap();
-    //         }
-    //         Event::Key(Key::Left) => {
-    //             write!(stdout, "{}", termion::cursor::Left(1)).unwrap();
-    //         }
-    //         Event::Key(Key::Char(c)) => {
-    //             if c == '\t' {
-    //                 write!(stdout, "tab").unwrap();
-    //             } else {
-    //                 write!(stdout, "{}", c).unwrap();
-    //             }
-    //         }
-    //         _ => {}
-    //     }
-    //     stdout.flush().unwrap();
-    // }
+    // let private_key = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d";
+    // let chain_id = 1337u64;
+    // let endpoint = "http://localhost:8545";
+    // let provider = Provider::<Http>::try_from(endpoint).unwrap();
+    // let private_key_bytes = hex::decode(private_key).expect("Invalid hex string for from");
+    // let private_key: SecretKey<_> =
+    //     SecretKey::from_slice(&private_key_bytes).expect("Invalid private key");
+    // let wallet = wallet::from(private_key).with_chain_id(chain_id);
+    // let client = Arc::new(SignerMiddleware::new(provider.clone(), wallet));
+
+    // println!("current directory: {:?}", std::env::current_dir().unwrap());
+    // let abi_path = "./abi/erc20.abi";
+    // let abi_reader = std::fs::File::open(abi_path).unwrap();
+    // let abi = abi::Abi::load(abi_reader).unwrap();
+    // // let abi = include_str!("../abi/erc20.abi");
+    // let contract_address = "0xd45a464a2412a2f83498d13635698a041b9dbe9b";
+    // let h160_contract_address = H160::from_str(contract_address).unwrap();
+    // let contract = Contract::new(h160_contract_address, abi, client);
+}
+
+fn help() {
+    println!("{}", "surl (Solidity CURL) CLI".blue().bold());
+    println!();
+
+    println!("{}", "Commands:".yellow());
+    println!();
+
+    println!("{}", "set-variable, sv - Set a variable".yellow());
+    println!("    Params: -n, --name: The name of the variable");
+    println!("            -v, --value: The value of the variable");
+    println!("    Example: set-variable -n key -v value");
+    println!();
+
+    println!("{}", "get-variable, gv - Get a variable".yellow());
+    println!("    Params: -n, --name: The name of the variable");
+    println!("    Example: get-variable -n key");
+    println!();
+
+    println!("{}", "load-abi, la - Load an ABI".yellow());
+    println!("    Params: -n, --name: The name of the ABI");
+    println!("            -p, --path: The path to the ABI file");
+    println!("    Example: load-abi -n erc20 -p ./abi/erc20.abi");
+    println!();
+
+    println!("{}", "get-abis-list, gal - Get a list of ABIs".yellow());
+    println!("    Example: get-abis-list");
+    println!();
+
+    println!("{}", "get-abis, ga - Get an ABI".yellow());
+    println!("    Params: -n, --name: The name of the ABI");
+    println!("    Example: get-abis -n erc20");
+    println!();
+
+    println!("{}", "pwd - Print the current working directory".yellow());
+    println!("    Example: pwd");
+    println!();
+
+    println!("{}", "load-state, ls - Load the state".yellow());
+    println!("    Params: -p, --path: The path to the state file");
+    println!("    Example: load-state");
+    println!();
+
+    println!("{}", "save-state, ss - Save the state".yellow());
+    println!("    Params: -p, --path: The path to the state file");
+    println!("    Example: save-state -p ./state.json");
+    println!();
+
+    println!("{}", "help - Show this help message".yellow());
+    println!("    Example: help");
+    println!();
 }
