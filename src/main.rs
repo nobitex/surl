@@ -78,6 +78,42 @@ fn test_state() {
     assert_eq!(state.get_variable("foo").unwrap().value, "bar");
 }
 
+trait SubCommand {
+    fn execute(&self, command: &str, state: &mut State);
+    fn help(&self) -> &str;
+    fn name(&self) -> &str;
+    fn matches(&self, command: &str) -> bool;
+    fn tokenise<'a>(&'a self, command: &'a str) -> Vec<&str>;
+}
+
+struct SetCommand {}
+
+impl SubCommand for SetCommand {
+    fn execute(&self, command: &str, state: &mut State) {
+        let tokens = self.tokenise(command);
+        let name = tokens[1];
+        let value = tokens[2];
+        state.set_variable(name.to_string(), value.to_string());
+    }
+
+    fn help(&self) -> &str {
+        "set <name> <value>"
+    }
+
+    fn name(&self) -> &str {
+        "set"
+    }
+
+    fn matches(&self, command: &str) -> bool {
+        let tokens = self.tokenise(command);
+        tokens.len() == 3 && tokens[0] == self.name()
+    }
+
+    fn tokenise<'a>(&'a self, command: &'a str) -> Vec<&str> {
+        command.split_whitespace().collect()
+    }
+}
+
 fn eval_expression(expression: &str, state: &State) -> String {
     let mut result = String::new();
     let mut in_variable = false;
