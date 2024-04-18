@@ -9,4 +9,14 @@ edition = "2021"
 ethers = "2.0.14"
 serde = "1.0.198"
 serde_json = "1.0.116"
+structopt = "0.3.26"
 termion = "3.0.0"
+tokio = { version = "1.30.0", features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "time",
+    "signal",
+    "fs",
+] }
+tokio-util = "0.7"

@@ -1,5 +1,8 @@
 extern crate termion;
+mod commands;
+mod state;
 
+use commands::{GetAbiOpt, GetAbisOpt, GetVariableOpt, LoadAbiOpt, LoadStateOpt, PWDOpt, SaveStateOpt, SetVariableOpt};
 use ethers::{
     core::k256::elliptic_curve::SecretKey,
     middleware::SignerMiddleware,
@@ -8,233 +11,42 @@ use ethers::{
     signers::{Signer, Wallet as wallet},
     utils::hex,
 };
+use state::State;
+use tokio::sync::Mutex;
 
 use std::{collections::HashMap, io::BufRead, path, str::FromStr, thread::sleep, time::Duration};
 use std::{
     io::{stdin, stdout, Write},
     sync::Arc,
 };
+use structopt::StructOpt;
 use termion::cursor;
 use termion::event::{Event, Key, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
 
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Variable {
-    value: String,
+#[derive(StructOpt, Debug)]
+enum Opt {
+    #[structopt(name = "set-variable", alias = "sv")]
+    SetVariable(SetVariableOpt),
+    #[structopt(name = "get-variable", alias = "gv")]
+    GetVariable(GetVariableOpt),
+    #[structopt(name = "load-abi", alias = "la")]
+    LoadAbi(LoadAbiOpt),
+    #[structopt(name = "get-abis-list", alias = "gal")]
+    GetAbis(GetAbisOpt),
+    #[structopt(name = "get-abis", alias = "ga")]
+    GetAbi(GetAbiOpt),
+    #[structopt(name = "pwd")]
+    PWD(PWDOpt),
+    #[structopt(name = "load-state", alias = "ls")]
+    LoadState(LoadStateOpt),
+    #[structopt(name = "save-state", alias = "ss")]
+    SaveState(SaveStateOpt),
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct State {
-    variables_by_name: HashMap<String, Variable>,
-    abis_by_name: HashMap<String, abi::Abi>,
-}
-
-impl State {
-    fn new() -> State {
-        State {
-            variables_by_name: HashMap::new(),
-            abis_by_name: HashMap::new(),
-        }
-    }
-
-    fn set_variable(&mut self, name: String, value: String) {
-        self.variables_by_name.insert(name, Variable { value });
-    }
-
-    fn get_variable(&self, name: &str) -> Option<&Variable> {
-        self.variables_by_name.get(name)
-    }
-
-    fn set_abi(&mut self, name: String, abi: abi::Abi) {
-        self.abis_by_name.insert(name, abi);
-    }
-
-    fn get_abi(&self, name: &str) -> Option<&abi::Abi> {
-        self.abis_by_name.get(name)
-    }
-
-    fn get_abis(&self) -> &HashMap<String, abi::Abi> {
-        &self.abis_by_name
-    }
-
-    fn save_state(&self, path: &str) {
-        let mut file = std::fs::File::create(path).unwrap();
-        serde_json::to_writer(&file, self).unwrap();
-    }
-
-    fn load_state(path: &str) -> State {
-        let file = std::fs::File::open(path).unwrap();
-        serde_json::from_reader(file).unwrap()
-    }
-}
-
-#[test]
-fn test_state() {
-    let mut state = State::new();
-    state.set_variable("foo".to_string(), "bar".to_string());
-    assert_eq!(state.get_variable("foo").unwrap().value, "bar");
-    assert_eq!(state.get_variable("foo").unwrap().value, "bar");
-}
-
-trait SubCommand {
-    fn execute(&self, command: &str, state: &mut State);
-    fn help(&self) -> &str;
-    fn name(&self) -> &str;
-    fn matches(&self, command: &str) -> bool;
-    fn tokenise<'a>(&'a self, command: &'a str) -> Vec<&str>;
-}
-
-struct SetCommand {}
-
-impl SubCommand for SetCommand {
-    fn execute(&self, command: &str, state: &mut State) {
-        let tokens = self.tokenise(command);
-        let name = tokens[1];
-        let value = tokens[2];
-        state.set_variable(name.to_string(), value.to_string());
-    }
-
-    fn help(&self) -> &str {
-        "set <name> <value>"
-    }
-
-    fn name(&self) -> &str {
-        "set"
-    }
-
-    fn matches(&self, command: &str) -> bool {
-        let tokens = self.tokenise(command);
-        tokens.len() == 3 && tokens[0] == self.name()
-    }
-
-    fn tokenise<'a>(&'a self, command: &'a str) -> Vec<&str> {
-        command.split_whitespace().collect()
-    }
-}
-
-fn eval_expression(expression: &str, state: &State) -> String {
-    let mut result = String::new();
-    let mut in_variable = false;
-    let mut variable_name = String::new();
-    for c in expression.chars() {
-        if c == '$' {
-            in_variable = true;
-        } else if in_variable {
-            if c == ' ' {
-                in_variable = false;
-                if let Some(variable) = state.get_variable(&variable_name) {
-                    result.push_str(&variable.value);
-                }
-                result.push(' ');
-                variable_name.clear();
-            } else {
-                variable_name.push(c);
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    if in_variable {
-        if let Some(variable) = state.get_variable(&variable_name) {
-            result.push_str(&variable.value);
-        }
-    }
-    result
-}
-
-#[test]
-fn test_eval_expression() {
-    let mut state = State::new();
-    state.set_variable("foo".to_string(), "bar".to_string());
-    assert_eq!(eval_expression("hello", &state), "hello");
-    assert_eq!(eval_expression("hello $foo", &state), "hello bar");
-    assert_eq!(
-        eval_expression("hello $foo world", &state),
-        "hello bar world"
-    );
-    assert_eq!(
-        eval_expression("hello $foo world $foo", &state),
-        "hello bar world bar"
-    );
-    assert_eq!(
-        eval_expression("hello $foo world $bar", &state),
-        "hello bar world "
-    );
-}
-
-fn eval_command(command: &str, state: &mut State) {
-    let mut parts = command.splitn(2, ' ');
-    match parts.next() {
-        // variable commands
-        Some("set") => {
-            let mut parts = parts.next().unwrap().splitn(2, ' ');
-            let name = parts.next().unwrap();
-            let value = parts.next().unwrap();
-            state.set_variable(name.to_string(), value.to_string());
-        }
-        Some("print") => {
-            let expression = parts.next().unwrap();
-            println!("{}", eval_expression(expression, state));
-        }
-
-        // abis commands
-        Some("loadAbi") => {
-            let mut parts = parts.next().unwrap().splitn(2, ' ');
-            let abi_name = parts.next().unwrap();
-            let abi_path = parts.next().unwrap();
-            let abi_reader = std::fs::File::open(abi_path).unwrap();
-            let abi = abi::Abi::load(abi_reader).unwrap();
-            state.set_abi(abi_name.to_string(), abi);
-            println!("Loaded ABI {}", abi_name);
-        }
-        Some("listAbis") => {
-            for (name, _) in state.get_abis() {
-                println!("{}", name);
-            }
-        }
-
-        // utility commands
-        Some("pwd") => {
-            println!("{:?}", std::env::current_dir().unwrap());
-        }
-
-        // state commands
-        Some("saveState") => {
-            let path = parts.next().unwrap();
-            state.save_state(path);
-            println!("state saved to {} successfully", path);
-        }
-        Some("loadState") => {
-            let path = parts.next().unwrap();
-            *state = State::load_state(path);
-            println!("state loaded from {} successfully", path);
-        }
-
-        _ => println!("Unknown command"),
-    }
-}
-
-#[test]
-fn test_eval_command() {
-    let mut state = State::new();
-    eval_command("set foo bar", &mut state);
-    eval_command("print hello $foo", &mut state);
-    eval_command("print hello $foo world", &mut state);
-    eval_command("print hello $foo world $foo", &mut state);
-    eval_command("print hello $foo world $bar", &mut state);
-}
-
-fn command_listener(state: &mut State) {
-    let stdin = stdin();
-    for line in stdin.lock().lines() {
-        let line = line.unwrap();
-        eval_command(&line, state);
-    }
-}
-
-fn main() {
+#[tokio::main]
+async fn main() {
     let private_key = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d";
     let chain_id = 1337u64;
     let endpoint = "http://localhost:8545";
@@ -254,9 +66,50 @@ fn main() {
     let h160_contract_address = H160::from_str(contract_address).unwrap();
     let contract = Contract::new(h160_contract_address, abi, client);
 
-    let mut state = State::new();
-    // run command listener
-    command_listener(&mut state);
+    let context = Arc::new(Mutex::new(State::new()));
+
+    let stdin = stdin();
+    for line in stdin.lock().lines() {
+        let line = vec!["surl", &line.unwrap()].join(" ");
+        let parts = line.split_whitespace().collect::<Vec<&str>>();
+
+        let matches = Opt::clap().get_matches_from_safe_borrow(parts.clone());
+        if matches.is_err() {
+            println!("Invalid command");
+            continue;
+        }
+
+        let opt = Opt::from_iter(parts);
+        match opt {
+            Opt::SetVariable(opt) => {
+                commands::set_variable(opt, context.clone()).await;
+            }
+            Opt::GetVariable(opt) => {
+                commands::get_variable(opt, context.clone()).await;
+            }
+            Opt::LoadAbi(opt) => {
+                commands::load_abi(opt, context.clone()).await;
+            }
+            Opt::GetAbis(opt) => {
+                commands::get_abis(opt, context.clone()).await;
+            }
+            Opt::GetAbi(opt) => {
+                commands::get_abi(opt, context.clone()).await;
+            }
+            Opt::PWD(opt) => {
+                commands::pwd(opt).await;
+            }
+            Opt::LoadState(opt) => {
+                commands::load_state(opt, context.clone()).await;
+            }
+            Opt::SaveState(opt) => {
+                commands::save_state(opt, context.clone()).await;
+            }
+            _ => {}
+        }
+    }
+
+    // command_listener(&mut command_handler);
     // std::thread::spawn(move || {
     //     command_listener(&mut state);
     // });
